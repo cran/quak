@@ -1,8 +1,3 @@
-local_tagged_tbl <- function(conn, name = "demo", env = parent.frame()) {
-  DBI::dbWriteTable(conn, name, data.frame(a = 1:3, b = letters[1:3]))
-  new_tbl_az(dplyr::tbl(conn, name))
-}
-
 test_that("new_tbl_az prepends the tbl_az class without dropping dbplyr classes", {
   skip_if_not_installed("dplyr")
   skip_if_not_installed("dbplyr")
@@ -102,6 +97,11 @@ test_that("tbl_delta validates time travel arguments before touching the network
   expect_error(
     tbl_delta(conn, "abfss://a/b", version = 1, timestamp = "2024-01-01"),
     "Only one",
+    class = "quak_error_bad_argument"
+  )
+  expect_error(
+    tbl_delta(conn, "abfss://a/b", name = "t", timestamp = "2024-01-01"),
+    "not supported",
     class = "quak_error_bad_argument"
   )
   expect_error(

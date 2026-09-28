@@ -13,8 +13,9 @@
 #' @param method `"attach"` (default) or `"view"`.
 #' @param replace Logical. Replace an existing registration. Default `TRUE`.
 #' @param version Optional non-negative Delta table version to attach.
-#' @param timestamp Optional Delta table timestamp to attach. Only one of
-#'   `version` and `timestamp` may be supplied.
+#' @param timestamp Deprecated. Not supported: DuckDB's `delta` extension
+#'   accepts a `TIMESTAMP` attach option but ignores it, returning the latest
+#'   snapshot. Supplying it raises an error. Use `version` instead.
 #' @return Invisibly returns `conn`.
 #' @examples
 #' \dontrun{
@@ -59,14 +60,14 @@ load_delta <- function(
   }
   check_delta_time_travel(version, timestamp)
   method <- rlang::arg_match(method)
-  if (method == "view" && (!is.null(version) || !is.null(timestamp))) {
+  if (method == "view" && !is.null(version)) {
     abort_bad_arg(
-      "{.arg version} and {.arg timestamp} are only supported with {.code method = 'attach'}.",
+      "{.arg version} is only supported with {.code method = 'attach'}.",
       arg = "method",
       value = method
     )
   }
-  check_azure_url(url)
+  url <- check_azure_url(url)
   ensure_azure_exts(conn, delta = TRUE)
   sql <- switch(
     method,
@@ -147,7 +148,7 @@ load_parquet <- function(
       value = replace
     )
   }
-  check_azure_url(url)
+  url <- check_azure_url(url)
   ensure_azure_exts(conn, delta = FALSE)
   tryCatch(
     DBI::dbExecute(
@@ -215,7 +216,7 @@ load_csv <- function(
   }
   options <- list(...)
   check_reader_options(options)
-  check_azure_url(url)
+  url <- check_azure_url(url)
   ensure_azure_exts(conn, delta = FALSE)
   tryCatch(
     DBI::dbExecute(conn, sql_csv_view(url, name, replace, conn, options)),
@@ -280,7 +281,7 @@ load_json <- function(
   }
   options <- list(...)
   check_reader_options(options)
-  check_azure_url(url)
+  url <- check_azure_url(url)
   ext_load("json", conn = conn, auto_install = TRUE, ask = FALSE)
   ensure_azure_exts(conn, delta = FALSE)
   tryCatch(
@@ -337,9 +338,12 @@ load_dataset <- function(
     csv = load_csv,
     json = load_json
   )
-  allowed <- setdiff(names(formals(target)), c("url", "name", "conn", "..."))
+  formal_names <- names(formals(target))
+  allowed <- setdiff(formal_names, c("url", "name", "conn", "..."))
   extra <- setdiff(names(list(...)), allowed)
-  if (length(extra) > 0L) {
+  # Loaders taking `...` forward reader options to DuckDB and validate them
+  # themselves, so the explicit-formals allowlist only applies to the others.
+  if (!("..." %in% formal_names) && length(extra) > 0L) {
     fn <- paste0("load_", format)
     abort_bad_arg(
       c(
@@ -357,17 +361,80 @@ load_dataset <- function(
 
 # Helpers ---------------------------------------------------------------------
 
-#' Validate that a URL is an Azure Data Lake URL
+#' Validate and normalise an Azure Data Lake URL
+#'
+#' Aborts when `url` is not an `abfss://` URL, then rewrites the
+#' `container@account` authority form to the account-host form DuckDB
+#' documents. Always use the returned value rather than the input.
 #'
 #' @param url Character scalar. URL to validate.
-#' @return Invisibly returns `NULL`; called for its side effect of aborting
-#'   when `url` is not an `abfss://` URL.
+#' @return The normalised URL.
 #' @keywords internal
 check_azure_url <- function(url) {
   if (!grepl("^abfss?://", url)) {
     abort_invalid_azure_url(url)
   }
-  invisible(NULL)
+  normalize_azure_url(url)
+}
+
+#' Rewrite `container@account` Azure URLs to the account-host form
+#'
+#' DuckDB's azure extension documents two ADLS URL forms:
+#' `abfss://container/path` (account supplied by a secret) and
+#' `abfss://account.dfs.core.windows.net/container/path`. The
+#' `abfss://container@account/path` form is not one of them: without a
+#' matching secret DuckDB rejects it with "Cannot identify the storage
+#' account from path", and because the container precedes the account in the
+#' string, no account-derived secret scope can ever match it.
+#'
+#' Rewriting it here means account-scoped secrets select correctly and the
+#' URL is one DuckDB documents. URLs without an `@` in the authority are
+#' returned unchanged.
+#'
+#' @param url Character scalar. An `abfss://` or `abfs://` URL.
+#' @return The normalised URL.
+#' @keywords internal
+normalize_azure_url <- function(url) {
+  parts <- regmatches(
+    url,
+    regexec("^(abfss?)://([^/@]+)@([^/]+)(/.*)?$", url)
+  )[[1L]]
+  if (length(parts) == 0L) {
+    return(url)
+  }
+  scheme <- parts[2L]
+  container <- parts[3L]
+  account <- parts[4L]
+  path <- parts[5L]
+  if (!grepl(".", account, fixed = TRUE)) {
+    account <- paste0(account, ".dfs.core.windows.net")
+  }
+  paste0(scheme, "://", account, "/", container, path)
+}
+
+#' Rewrite an account-host Azure URL to the form the `delta` extension reads
+#'
+#' The `delta` extension hands the URL to delta-kernel's `object_store`, which
+#' rejects the account-host form `abfss://account.dfs.core.windows.net/...`.
+#' It accepts `abfss://container@account.dfs.core.windows.net/path`, so every
+#' SQL builder that calls the `delta` extension passes its URL through here.
+#'
+#' Account-scoped secrets never match the result, because the container comes
+#' before the account. Delta tables therefore need an unscoped secret.
+#'
+#' @param url Character scalar. A URL returned by [check_azure_url()].
+#' @return The URL in `container@account` form. URLs whose authority has no
+#'   dot, such as `abfss://container/path`, are returned unchanged.
+#' @keywords internal
+delta_url <- function(url) {
+  parts <- regmatches(
+    url,
+    regexec("^(abfss?)://([^/@]+\\.[^/@]+)/([^/]+)(/.*)?$", url)
+  )[[1L]]
+  if (length(parts) == 0L) {
+    return(url)
+  }
+  paste0(parts[2L], "://", parts[4L], "@", parts[3L], parts[5L])
 }
 
 #' Ensure Azure-related extensions are loaded
@@ -401,6 +468,7 @@ sql_delta_attach <- function(
   timestamp = NULL
 ) {
   time_travel <- sql_delta_time_travel(version, timestamp, conn)
+  url <- delta_url(url)
   glue::glue_sql(
     "ATTACH {DBI::SQL(sql_or_replace(replace))}{url}
        AS {`name`}
@@ -410,7 +478,7 @@ sql_delta_attach <- function(
 }
 
 sql_delta_scan <- function(url, conn) {
-  glue::glue_sql("SELECT * FROM delta_scan({url})", .con = conn)
+  glue::glue_sql("SELECT * FROM delta_scan({delta_url(url)})", .con = conn)
 }
 
 sql_parquet_scan <- function(url, hive_partitioning = FALSE, conn) {
@@ -604,16 +672,29 @@ check_delta_time_travel <- function(
       call = call
     )
   }
+  # DuckDB's delta extension accepts a TIMESTAMP option on ATTACH but ignores
+  # it, returning the latest snapshot. It validates no ATTACH options at all,
+  # so refusing here is the only way the caller learns the request was not met.
+  if (!is.null(timestamp)) {
+    abort_bad_arg(
+      c(
+        "{.arg timestamp} is not supported by DuckDB's {.pkg delta} extension.",
+        "x" = "It accepts the option, ignores it, and returns the latest snapshot.",
+        "i" = "Use {.arg version} to pin a Delta table version instead."
+      ),
+      arg = "timestamp",
+      value = timestamp,
+      call = call
+    )
+  }
   invisible(NULL)
 }
 
 sql_delta_time_travel <- function(version = NULL, timestamp = NULL, conn) {
+  # Rejects `timestamp`; only `version` can reach the SQL below.
   check_delta_time_travel(version, timestamp)
   if (!is.null(version)) {
     return(glue::glue_sql(", VERSION {version}", .con = conn))
-  }
-  if (!is.null(timestamp)) {
-    return(glue::glue_sql(", TIMESTAMP {timestamp}", .con = conn))
   }
   DBI::SQL("")
 }

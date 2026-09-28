@@ -100,7 +100,9 @@ az_list_secrets <- function(conn = conn_default()) {
 #' @param conn A DuckDB connection.
 #' @param token Character scalar. Access token value.
 #' @param account Optional storage account name. When supplied, the secret is
-#'   scoped to `abfss://<account>/`.
+#'   scoped to that account's hosts and applies to Parquet, CSV and JSON
+#'   reads. Delta tables never match an account-scoped secret, so register an
+#'   unscoped secret for them.
 #' @return Invisibly returns `conn`.
 #' @examples
 #' \dontrun{
@@ -159,7 +161,9 @@ az_set_token_secret <- function(
 #' @param client_id Character scalar. Service principal client ID.
 #' @param client_secret Character scalar. Service principal client secret.
 #' @param account Optional storage account name. When supplied, the secret is
-#'   scoped to that account.
+#'   scoped to that account's hosts and applies to Parquet, CSV and JSON
+#'   reads. Delta tables never match an account-scoped secret, so register an
+#'   unscoped secret for them.
 #' @return Invisibly returns `conn`.
 #' @examples
 #' \dontrun{
@@ -221,7 +225,9 @@ az_set_sp_secret <- function(
 #'
 #' @param conn A DuckDB connection.
 #' @param account Optional storage account name. When supplied, the secret is
-#'   scoped to that account.
+#'   scoped to that account's hosts and applies to Parquet, CSV and JSON
+#'   reads. Delta tables never match an account-scoped secret, so register an
+#'   unscoped secret for them.
 #' @param chain Optional character vector of DuckDB credential-chain entries.
 #'   Values are joined with semicolons and passed as DuckDB's `CHAIN` value.
 #'   Defaults to `"default"`, DuckDB's default credential chain.
@@ -302,8 +308,30 @@ az_secret_scope_clause <- function(account, conn) {
   if (is.null(account)) {
     return(DBI::SQL(""))
   }
-  scope_url <- paste0("abfss://", account, "/")
-  glue::glue_sql(",\n      SCOPE {scope_url}", .con = conn)
+  scopes <- az_account_scopes(account)
+  glue::glue_sql(",\n      SCOPE ({scopes*})", .con = conn)
+}
+
+#' Secret scopes matching an Azure storage account
+#'
+#' DuckDB matches secret scopes as plain string prefixes against the raw URL,
+#' with no normalisation. An account-derived scope therefore has to name the
+#' account's host, which differs per scheme: `abfss://`/`abfs://` address the
+#' ADLS endpoint, `az://`/`azure://` the Blob endpoint.
+#'
+#' @param account Character scalar. Storage account name, either bare
+#'   (`"myaccount"`) or fully qualified (`"myaccount.dfs.core.windows.net"`).
+#' @return Character vector of scope prefixes, each with a trailing slash.
+#' @keywords internal
+az_account_scopes <- function(account) {
+  if (grepl(".", account, fixed = TRUE)) {
+    # Already a fully qualified host; use it verbatim for every scheme.
+    return(paste0(c("abfss://", "abfs://", "az://", "azure://"), account, "/"))
+  }
+  c(
+    paste0(c("abfss://", "abfs://"), account, ".dfs.core.windows.net/"),
+    paste0(c("az://", "azure://"), account, ".blob.core.windows.net/")
+  )
 }
 
 az_secret_chain_clause <- function(chain, conn) {

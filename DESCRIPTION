@@ -1,6 +1,6 @@
 Package: quak
 Title: Query 'Azure Data Lake Storage Gen2' with 'DuckDB'
-Version: 0.1.0
+Version: 0.1.1
 Authors@R: 
     person("Pedro", "Baltazar", email = "pedrobtz@gmail.com",
            role = c("aut", "cre", "cph"))
@@ -11,21 +11,25 @@ Description: Provides convenience utilities for using 'DuckDB' directly over
     supports optional repository mirrors for restricted networks. Integrates
     well with 'DBI' for SQL workflows and with 'dplyr' and 'dbplyr' for lazy
     table queries.
-URL: https://github.com/pedrobtz/quak
+URL: https://pedrobtz.github.io/quak/, https://github.com/pedrobtz/quak
 BugReports: https://github.com/pedrobtz/quak/issues
 License: MIT + file LICENSE
 Encoding: UTF-8
-RoxygenNote: 7.3.3
-Imports: cli, curl, DBI, duckdb, fs, glue, rlang, tools, utils
-Suggests: azr (>= 0.3.4), dbplyr, dplyr, testthat (>= 3.0.0), tibble,
-        withr
+Depends: R (>= 4.1.0)
+Imports: cli, curl, DBI (>= 1.2.0), duckdb (>= 1.5.4), fs, glue, rlang,
+        tools, utils
+Suggests: azr (>= 0.3.4), dbplyr, dplyr, nanoarrow, testthat (>=
+        3.0.0), tibble, withr
 Config/testthat/edition: 3
+Config/Needs/website: rmarkdown
 Collate: 'options.R' 'conditions.R' 'connection.R' 'cache.R'
         'repositories.R' 'extensions.R' 'azure.R' 'datasets.R'
-        'tables.R' 'lake.R' 'delta.R' 'quak-package.R' 'zzz.R'
+        'tables.R' 'arrow.R' 'lake.R' 'delta.R' 'quak-package.R'
+        'zzz.R'
+Config/roxygen2/version: 8.0.0
 NeedsCompilation: no
-Packaged: 2026-06-04 20:51:19 UTC; pbtz
+Packaged: 2026-09-28 14:58:23 UTC; pbtz
 Author: Pedro Baltazar [aut, cre, cph]
 Maintainer: Pedro Baltazar <pedrobtz@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-06-09 15:50:02 UTC
+Date/Publication: 2026-09-28 15:30:20 UTC
